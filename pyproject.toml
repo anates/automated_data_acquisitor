@@ -1,0 +1,50 @@
+[project]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+name = "automated-data-aquisitor"
+version = "1.0.3"
+description = "Automated data acquisition using syncronized data acquisition cards from Spectrum Instruments"
+authors = [
+    { name = "Saleh Baghersalimi", email = "saleh.baghersalimi@empa.ch" },
+    { name = "Roland Axel Richter", email = "roland.richter@empa.ch" },
+]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "spcm (>=1.5.2,<2.0.0)",
+    "numpy (>=2.2.3,<3.0.0)",
+    "pandas (>=2.2.3,<3.0.0)",
+    "matplotlib (>=3.10.1,<4.0.0)",
+    "argparse (>=1.4.0,<2.0.0)",
+    "pyarrow (>=19.0.1,<20.0.0)",
+    "scipy (>=1.15.3,<2.0.0)",
+    "pyserde (>=0.24.0,<0.25.0)",
+]
+
+[project.scripts]
+acquire_data = "automated_data_acquisitor.automated_data_acquisitor:main"
+
+[tool.poetry.requires-plugins]
+poetry-plugin-export = "^1.8.0"
+poetry-plugin-up = "^0.9.0"
+
+[tool.poetry.group.dev.dependencies]
+sphinx = "^8.2.3"
+sphinx-rtd-theme = "^3.0.2"
+sphinx-book-theme = "^1.1.4"
+sphinx-autodoc-typehints = "^3.2.0"
+myst-parser = "^4.0.1"
+
+[tool.poetry]
+packages = [{ include = "automated_data_acquisitor", from = "src" }]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pylint.'MAIN']
+ignore-patterns = ["conf.py"]

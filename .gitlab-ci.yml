@@ -1,0 +1,189 @@
+# This file is a template, and might need editing before it works on your project.
+# To contribute improvements to CI/CD templates, please follow the Development guide at:
+# https://docs.gitlab.com/ee/development/cicd/templates.html
+# This specific template is located at:
+# https://gitlab.com/gitlab-org/gitlab/-/blob/master/lib/gitlab/ci/templates/Python.gitlab-ci.yml
+
+# Official language image. Look for the different tagged releases at:
+# https://hub.docker.com/r/library/python/tags/
+variables:
+  PYTHON_VERSION: "3.12"
+  # Change pip's cache directory to be inside the project directory since we can
+  # only cache local items.
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+image: python:$PYTHON_VERSION
+
+##############
+# Conditions #
+##############
+.if-merge-request-pipeline: &if-merge-request-pipeline
+  if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == $CI_DEFAULT_BRANCH'
+.if-new-push-pipeline: &if-new-push-pipeline
+  if: '$CI_PIPELINE_SOURCE == "push"'
+.if-new-main-pipeline: &if-new-main-pipeline
+  if: "$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH"
+
+##########
+# Rules: #
+##########
+
+.rules:new_push_pipelines:
+  rules:
+    - <<: *if-new-push-pipeline
+
+.rules:merge_request_pipelines:
+  rules:
+    - <<: *if-merge-request-pipeline
+    - <<: *if-new-main-pipeline
+
+.rules:merge_request_pipelines_with_test_needs:
+  rules:
+    - <<: *if-merge-request-pipeline
+      needs:
+        - job: test_job
+          optional: false
+
+.rules:merge_request_pipelines_no_docs:
+  rules:
+    - <<: *if-merge-request-pipeline
+
+# Pip's cache doesn't store the python packages
+# https://pip.pypa.io/en/stable/topics/caching/
+#
+# If you want to also cache the installed packages, you have to install
+# them in a virtualenv and cache it as well.
+cache:
+  paths:
+    - .cache/pip
+    # - .cache/pypoetry
+
+before_script:
+  - apt-get update && apt-get install software-properties-common python3-launchpadlib -y && add-apt-repository main contrib non-free non-free-firmware
+  - echo "deb http://deb.debian.org/debian/ bookworm main contrib non-free non-free-firmware" >> /etc/apt/sources.list
+  - apt-get update && apt-get install ffmpeg libsm6 libxext6 libegl-dev -y # Install necessary packages
+  - if command -v nvidia-smi &> /dev/null; then nvidia-smi; else echo "No GPU found"; fi # Check NVIDIA GPU status
+  - python --version # Check Python version
+  - pip install --upgrade pip
+  - pip install poetry
+  - poetry install
+  - source $(poetry env info --path)/bin/activate
+
+stages:
+  - test
+  - wheel_build
+  - doc_build
+  - pages
+  - prepare_release
+  - release
+
+test_job:
+  image: "python:$VERSION"
+  stage: test
+  extends:
+    - .rules:new_push_pipelines
+    - .rules:merge_request_pipelines_no_docs
+  script:
+    - echo "No testing included yet for python version $VERSION"
+    # - poetry run pytest ./tests/
+  parallel:
+    matrix:
+      - VERSION: ["3.11", "3.12", "3.13"]
+  artifacts:
+    when: always
+    reports:
+      junit: $CI_PROJECT_DIR/junit_report.xml
+      coverage_report:
+        coverage_format: cobertura
+        path: $CI_PROJECT_DIR/coverage.xml
+  coverage: '/TOTAL.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+
+wheel_build_job:
+  stage: wheel_build
+  needs: [test_job]
+  variables:
+    TWINE_USERNAME: gitlab-ci-token
+    TWINE_PASSWORD: $CI_JOB_TOKEN
+  extends:
+    - .rules:merge_request_pipelines_no_docs
+  script:
+    - poetry config repositories.gitlab-empa ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/packages/pypi
+    - poetry config http-basic.gitlab-empa gitlab-ci-token $CI_JOB_TOKEN
+    - poetry publish --build --repository gitlab-empa
+  artifacts:
+    paths:
+      - $CI_PROJECT_DIR/dist/*.whl
+
+doc_build_job:
+  stage: doc_build
+  extends:
+    - .rules:merge_request_pipelines_with_test_needs
+    - .rules:merge_request_pipelines
+  script:
+    - ls -la
+    - echo $PWD
+    - cd docs
+    - ls -la
+    - ls -la ../src
+    - poetry run sphinx-apidoc -o ./source/ $CI_PROJECT_DIR/src/automated_data_acquisitor/ --force
+    - poetry run sphinx-build -M html ./source/ ./build/
+    - mv build/html/ $CI_PROJECT_DIR/public/
+    - ls -la
+    - ls -la ..
+  artifacts:
+    paths:
+      - public/
+
+pages:
+  stage: pages
+  needs: [doc_build_job]
+  script:
+    - echo "Publishing to GitLab Pages"
+  artifacts:
+    paths:
+      - public
+  only:
+    - main
+
+prepare_release_job:
+  stage: prepare_release
+  extends:
+    - .rules:merge_request_pipelines_no_docs
+  needs:
+    - job: wheel_build_job
+      optional: false
+      artifacts: true
+    - job: doc_build_job
+      optional: false
+      artifacts: true
+  script:
+    - poetry install
+    - VERSION=$(poetry version | grep -Po "\d*\.\d*\.\d*\w\d*")
+    - echo "VERSION=v$VERSION" >> variables.env
+  artifacts:
+    reports:
+      dotenv: variables.env
+
+release_job:
+  stage: release
+  needs:
+    - job: prepare_release_job
+      optional: false
+      artifacts: true
+    - job: wheel_build_job
+      optional: false
+      artifacts: true
+    - job: doc_build_job
+      optional: false
+      artifacts: true
+  extends:
+    - .rules:merge_request_pipelines_no_docs
+  script:
+    - echo "running release_job"
+    - echo "Current commit tag is $CI_COMMIT_TAG"
+    - curl --location --output /usr/local/bin/release-cli "https://gitlab.com/api/v4/projects/gitlab-org%2Frelease-cli/packages/generic/release-cli/latest/release-cli-linux-amd64"
+    - chmod +x /usr/local/bin/release-cli
+    - release-cli -v
+  release: # See https://docs.gitlab.com/ee/ci/yaml/#release for available properties
+    tag_name: $VERSION
+    description: "Release $VERSION"
